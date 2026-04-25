@@ -278,13 +278,6 @@ static int find_device_by_hwaddr(sqlite3 *db, const char hwaddr[])
 	if(FTLDBerror())
 		return DB_FAILED;
 
-	// Return early if we know MAC addresses are not unique
-	if(!config.resolver.macNames.v.b)
-	{
-		log_debug(DEBUG_ARP, "find_device_by_hwaddr(%s) - returning early", hwaddr);
-		return DB_NODATA;
-	}
-
 	log_debug(DEBUG_ARP, "find_device_by_hwaddr(%s)", hwaddr);
 
 	const char *querystr = "SELECT id FROM network WHERE hwaddr = ?1 COLLATE NOCASE;";

@@ -111,7 +111,7 @@ cJSON *addJSONConfValue(const enum conf_type conf_type, union conf_value *val)
 			return cJSON_CreateNumber(val->d);
 		case CONF_STRING:
 		case CONF_STRING_ALLOCATED:
-			return val->s ? cJSON_CreateStringReference(val->s) : cJSON_CreateNull();
+			return val->s ? cJSON_CreateString(val->s) : cJSON_CreateNull();
 		case CONF_ENUM_PTR_TYPE:
 			return cJSON_CreateStringReference(get_ptr_type_str(val->ptr_type));
 		case CONF_ENUM_BUSY_TYPE:
@@ -1106,7 +1106,7 @@ int api_config(struct ftl_conn *api)
 
 	// Check if this is an app session and reject the request if app sudo
 	// mode is disabled
-	if(api->session != NULL && api->session->app && !config.webserver.api.app_sudo.v.b)
+	if(api->session.used && api->session.app && !config.webserver.api.app_sudo.v.b)
 	{
 		return send_json_error(api, 403,
 		                       "forbidden",
@@ -1115,7 +1115,7 @@ int api_config(struct ftl_conn *api)
 	}
 
 	// Check if this is a CLI session and reject the request
-	if(api->session != NULL && api->session->cli)
+	if(api->session.used && api->session.cli)
 	{
 		return send_json_error(api, 403,
 		                       "forbidden",
@@ -1132,5 +1132,51 @@ int api_config(struct ftl_conn *api)
 	else if(api->method == HTTP_PUT || api->method == HTTP_DELETE)
 		return api_config_put_delete(api);
 
+	return 0;
+}
+
+int api_config_properties(struct ftl_conn *api)
+{
+	cJSON *read_only = JSON_NEW_ARRAY();
+
+	// Iterate over all known config elements
+	for(unsigned int i = 0; i < CONFIG_ELEMENTS; i++)
+	{
+		// Get pointer to memory location of this conf_item
+		struct conf_item *conf_item = get_conf_item(&config, i);
+
+		const char *reason = NULL;
+		const char *description = NULL;
+		if(conf_item->f & FLAG_ENV_VAR)
+		{
+			reason = "env_var";
+			description = "Set via environment variable";
+		}
+		else if(config.misc.readOnly.v.b)
+		{
+			reason = "read_only";
+			description = "Config is in read-only mode";
+		}
+		else if(conf_item->f & FLAG_READ_ONLY)
+		{
+			reason = "read_only";
+			description = "Variable can only be set in pihole.toml, not via API";
+		}
+		else
+			continue;
+
+		cJSON *obj = JSON_NEW_OBJECT();
+		JSON_REF_STR_IN_OBJECT(obj, "key", conf_item->k);
+		JSON_REF_STR_IN_OBJECT(obj, "reason", reason);
+		JSON_REF_STR_IN_OBJECT(obj, "description", description);
+		JSON_ADD_ITEM_TO_ARRAY(read_only, obj);
+	}
+
+	// Build and return JSON response
+	cJSON *configj = JSON_NEW_OBJECT();
+	JSON_ADD_ITEM_TO_OBJECT(configj, "read_only", read_only);
+	cJSON *json = JSON_NEW_OBJECT();
+	JSON_ADD_ITEM_TO_OBJECT(json, "config", configj);
+	JSON_SEND_OBJECT(json);
 	return 0;
 }

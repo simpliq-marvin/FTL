@@ -18,7 +18,11 @@
 // HUGE_VAL
 #include <math.h>
 
-char pi_hole_extra_headers[PIHOLE_HEADERS_MAXLEN] = { 0 };
+// Thread-local to prevent races between concurrent civetweb worker threads.
+// Each request is handled entirely within a single thread, so the buffer is
+// written by the API handler and then read by send_additional_header() in
+// the same thread.
+_Thread_local char pi_hole_extra_headers[PIHOLE_HEADERS_MAXLEN] = { 0 };
 
 // Provides a compile-time flag for JSON formatting
 // This should never be needed as all modern browsers

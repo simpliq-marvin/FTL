@@ -45,5 +45,8 @@ src/api/docs/hex
 dig.log
 ptr.log
 
+# Test libraries (cloned by test/run.sh)
+test/libs/
+
 # Compiled LUA scripts
 /src/lua/scripts/*.hex

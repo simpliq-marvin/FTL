@@ -129,7 +129,11 @@ void printFTLenv(void)
 					        cli_cross(), item->key);
 
 				if(item->error_allocated)
+				{
 					free(item->error);
+					item->error = NULL;
+					item->error_allocated = false;
+				}
 			}
 
 			continue;

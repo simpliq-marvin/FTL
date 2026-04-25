@@ -22,18 +22,23 @@
   #     true or false
   CNAMEdeepInspect = true
 
-  # Should _esni. subdomains be blocked by default? Encrypted Server Name Indication
-  # (ESNI) is certainly a good step into the right direction to enhance privacy on the
-  # web. It prevents on-path observers, including ISPs, coffee shop owners and
-  # firewalls, from intercepting the TLS Server Name Indication (SNI) extension by
-  # encrypting it. This prevents the SNI from being used to determine which websites
-  # users are visiting.
+  # Should _esni. subdomains of blocked domains also be blocked by default? Encrypted
+  # Server Name Indication (ESNI) is certainly a good step into the right direction to
+  # enhance privacy on the web. It prevents on-path observers, including ISPs, coffee
+  # shop owners and firewalls, from intercepting the TLS Server Name Indication (SNI)
+  # extension by encrypting it. This prevents the SNI from being used to determine which
+  # websites users are visiting.
   #
   # ESNI will obviously cause issues for pixelserv-tls which will be unable to generate
-  # matching certificates on-the-fly when it cannot read the SNI. Cloudflare and Firefox
-  # are already enabling ESNI. According to the IETF draft (link above), we can easily
-  # restore pixelserv-tls's operation by replying NXDOMAIN to _esni. subdomains of
-  # blocked domains as this mimics a "not configured for this domain" behavior.
+  # matching certificates on-the-fly when it cannot read the SNI. According to the IETF
+  # draft (link above), we can easily restore pixelserv-tls's operation by replying
+  # NXDOMAIN to _esni. subdomains of blocked domains as this mimics a "not configured
+  # for this domain" behavior.
+  #
+  # ESNI is mostly obsolete. It was previously rolled out by Cloudflare and Firefox, but
+  # they, as well as almost every client and server, are now using Encrypted Client
+  # Hello (ECH) instead of ESNI. ECH is served via the HTTPS record on the same RRname,
+  # so it will automatically be blocked.
   #
   # Allowed values are:
   #     true or false
@@ -547,6 +552,19 @@
     # Allowed values are:
     #     A positive integer value in seconds
     interval = 0 ### CHANGED, default = 60
+
+    # IP addresses that should bypass per-client DNS rate limiting. Matching is exact by IP
+    # address and applies only when rate limiting is enabled. This is intended for trusted
+    # clients that may generate short legitimate DNS bursts.
+    #
+    # Example: [ "192.168.1.10", "fd00::10" ]
+    #
+    # Allowed values are:
+    #     Array of valid IPv4 and/or IPv6 addresses
+    exemptIPs = [
+      "192.168.1.10",
+      "fd00::10"
+    ] ### CHANGED, default = []
 
 [dhcp]
   # Is the embedded DHCP server enabled?
@@ -1276,12 +1294,6 @@
       unit = "C"
 
 [files]
-  # The file which contains the PID of FTL's main process.
-  #
-  # Allowed values are:
-  #     Any writable file
-  pid = "/run/pihole-FTL.pid"
-
   # The location of FTL's long-term database
   #
   # Allowed values are:
@@ -1738,8 +1750,8 @@
   all = true ### CHANGED, default = false
 
 # Configuration statistics:
-# 167 total entries out of which 113 entries are default
-# --> 54 entries are modified
+# 167 total entries out of which 112 entries are default
+# --> 55 entries are modified
 # 3 entries are forced through environment:
 #   - misc.nice
 #   - misc.check.shmem

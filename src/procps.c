@@ -78,10 +78,9 @@ bool get_process_name(const pid_t pid, char name[PROC_PATH_SIZ])
 /**
  * @brief Reads the process ID (PID) from a file.
  *
- * This function attempts to open a file specified by the configuration
- * and read the PID from it. If the file cannot be opened or the PID
- * cannot be parsed, appropriate warnings are logged and the function
- * returns -1.
+ * This function attempts to open the PID file and read the PID from it.
+ * If the file cannot be opened or the PID cannot be parsed, appropriate
+ * warnings are logged and the function returns -1.
  *
  * @return pid_t The PID read from the file on success, or -1 on failure.
  */
@@ -90,7 +89,7 @@ static pid_t readPID(void)
 	pid_t pid = -1;
 	FILE *f = NULL;
 	// Open file for reading
-	if((f = fopen(config.files.pid.v.s, "r")) == NULL)
+	if((f = fopen(FTL_PID_FILE, "r")) == NULL)
 	{
 		// Log error
 		log_warn("Unable to read PID from file: %s", strerror(errno));

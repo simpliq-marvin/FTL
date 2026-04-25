@@ -233,15 +233,20 @@ int api_history_clients(struct ftl_conn *api)
 
 		// Create JSON object for this client
 		cJSON *item = JSON_NEW_OBJECT();
-		JSON_REF_STR_IN_OBJECT(item, "name", client_name);
+		// Must COPY, not reference: the SHM strings buffer can be
+		// relocated by mremap(MREMAP_MAYMOVE) in another thread after
+		// we release the lock below, which would leave a dangling
+		// pointer if we used JSON_REF_STR_IN_OBJECT here (see #2786)
+		JSON_COPY_STR_TO_OBJECT(item, "name", client_name);
 		JSON_ADD_NUMBER_TO_OBJECT(item, "total", client->count);
 		JSON_ADD_ITEM_TO_OBJECT(clients, client_ip, item);
 	}
 
-	// Unlock already here to avoid keeping the lock during JSON generation
-	// This is safe because we don't access any shared memory after this
-	// point and all strings in the JSON are references to idempotent shared
-	// memory and can, thus, be accessed at any time without locking
+	// Unlock here to avoid keeping the lock during JSON generation.
+	// All shared memory strings used above are either copied into cJSON
+	// (via JSON_COPY_STR_TO_OBJECT) or used as cJSON object keys (which
+	// cJSON_AddItemToObject always duplicates), so no dangling pointers
+	// can occur if the strings SHM segment is remapped by another thread.
 	unlock_shm();
 
 	// Add "others" client only if there are more clients than we return

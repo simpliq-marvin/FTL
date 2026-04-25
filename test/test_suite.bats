@@ -778,31 +778,8 @@ setup() {
   [[ "${lines[0]}" == "80o,443os,[::]:80o,[::]:443os" ]]
 }
 
-@test "No WARNING messages in FTL.log (besides known warnings)" {
-  run bash -c 'grep "WARNING:" /var/log/pihole/FTL.log | grep -v -E "CAP_NET_ADMIN|CAP_NET_RAW|CAP_SYS_NICE|CAP_IPC_LOCK|CAP_CHOWN|CAP_NET_BIND_SERVICE|CAP_SYS_TIME|FTLCONF_|(Negative DS reply without NS record received for ftl)|(nameserver 127.0.0.1 refused to do a recursive query)"'
-  printf "%s\n" "${lines[@]}"
-  [[ "${lines[@]}" == "" ]]
-}
-
-@test "No ERROR messages in FTL.log (besides known/intended error)" {
-  run bash -c 'grep "ERROR: " /var/log/pihole/FTL.log'
-  printf "%s\n" "${lines[@]}"
-  run bash -c 'grep "ERROR: " /var/log/pihole/FTL.log | grep -c -v -E "(index\.html)|(Failed to create shared memory object)|(FTLCONF_debug_api is not a boolean)|(FTLCONF_files_pcap files.pcap: not a valid file path)|(Failed to set|adjust time during NTP sync: Insufficient permissions)|(nlrequest error)|(Failed to read ARP cache)"'
-  printf "count: %s\n" "${lines[@]}"
-  [[ ${lines[0]} == "0" ]]
-}
-
-@test "No CRIT messages in FTL.log (besides error due to starting FTL more than once)" {
-  run bash -c 'grep "CRIT:" /var/log/pihole/FTL.log | grep -v "CRIT: pihole-FTL is already running"'
-  printf "%s\n" "${lines[@]}"
-  [[ "${lines[@]}" == "" ]]
-}
-
-@test "No \"DB not available\" messages in FTL.log" {
-  run bash -c 'grep -c "database not available" /var/log/pihole/FTL.log'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "0" ]]
-}
+# NOTE: Log validation (WARNING/ERROR/CRIT/DB checks) moved to the final
+# log scan in run.sh, which runs after both BATS and pytest complete.
 
 # Regex tests
 @test "Compiled deny regex as expected" {
@@ -1274,17 +1251,7 @@ setup() {
   [[ ${lines[0]} == "4" ]]
 }
 
-@test "HTTP server responds with JSON error 404 to unknown API path" {
-  run bash -c 'curl -s 127.0.0.1/api/undefined'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == '{"error":{"key":"not_found","message":"Not found","hint":"/api/undefined"},"took":'*'}' ]]
-}
-
-@test "HTTP server responds with error 404 to path outside /admin" {
-  run bash -c 'curl -sI 127.0.0.1/undefined'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[@]} == *"HTTP/1.1 404 Not Found"* ]]
-}
+# NOTE: HTTP 404 tests moved to pytest (test/api/test_api.py)
 
 @test "LUA: Interpreter returns FTL version" {
   run bash -c './pihole-FTL lua -e "print(pihole.ftl_version())"'
@@ -1784,121 +1751,12 @@ setup() {
   [[ $status == 5 ]]
 }
 
-@test "Changing a config option set forced by ENVVAR is not possible via the API" {
-  run bash -c 'curl -s -X PATCH http://127.0.0.1/api/config/misc/nice -d "{\"config\":{\"misc\":{\"nice\":-12}}}"'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == '{"error":{"key":"bad_request","message":"Config items set via environment variables cannot be changed via the API","hint":"misc.nice"},"took":'*'}' ]]
-}
+# NOTE: Envvar-protected config API test moved to pytest (test/api/test_api.py)
 
 # We cannot easily test IPv6 as it may not be available in docker (CI)
 
-@test "API domain search: Non-existing domain returns expected JSON" {
-  run bash -c 'curl -s 127.0.0.1/api/search/non.existent'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == '{"search":{"domains":[],"gravity":[],"results":{"domains":{"exact":0,"regex":0},"gravity":{"allow":0,"block":0},"total":0},"parameters":{"N":20,"partial":false,"domain":"non.existent","debug":false}},"took":'*'}' ]]
-}
-
-@test "API domain search: antigravity.ftl returns expected JSON" {
-  run bash -c 'curl -s 127.0.0.1/api/search/antigravity.ftl'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == '{"search":{"domains":[],"gravity":[{"domain":"antigravity.ftl","type":"block","address":"https://pi-hole.net/block.txt","comment":"Fake block-list","enabled":true,"id":1,"date_added":1559928803,"date_modified":1559928803,"type":"block","date_updated":1559928803,"number":2000,"invalid_domains":2,"abp_entries":0,"status":1,"groups":[0,2]},{"domain":"antigravity.ftl","type":"allow","address":"https://pi-hole.net/allow.txt","comment":"Fake allow-list","enabled":true,"id":2,"date_added":1559928803,"date_modified":1559928803,"type":"allow","date_updated":1559928803,"number":2000,"invalid_domains":2,"abp_entries":0,"status":1,"groups":[0]},{"domain":"@@||antigravity.ftl^","type":"allow","address":"https://pi-hole.net/allow.txt","comment":"Fake allow-list","enabled":true,"id":2,"date_added":1559928803,"date_modified":1559928803,"type":"allow","date_updated":1559928803,"number":2000,"invalid_domains":2,"abp_entries":0,"status":1,"groups":[0]}],"results":{"domains":{"exact":0,"regex":0},"gravity":{"allow":2,"block":1},"total":3},"parameters":{"N":20,"partial":false,"domain":"antigravity.ftl","debug":false}},"took":'*'}' ]]
-}
-
-@test "API domain search: Internationalized/partially capital domain returns expected lowercase punycode domain" {
-  run bash -c 'curl -s 127.0.0.1/api/search/äBC.com?debug=true | jq .search.debug.punycode'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == '"xn--bc-uia.com"' ]]
-}
-
-@test "API history: Returns full 24 hours even if only a few queries are made" {
-  run bash -c 'curl -s 127.0.0.1/api/history | jq ".history | length"'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "145" ]]
-}
-
-@test "API history/clients: Returns full 24 hours even if only a few queries are made" {
-  run bash -c 'curl -s 127.0.0.1/api/history/clients | jq ".history | length"'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "145" ]]
-}
-
-@test "Check /api/lists?type=block returning only blocking lists" {
-  run bash -c 'curl -s 127.0.0.1/api/lists?type=block | jq ".lists[].type"'
-  printf "%s\n" "${lines[@]}"
-  # Check no allow entries are present
-  [[ ${lines[@]} != *"allow"* ]]
-}
-
-@test "Check /api/lists?type=allow returning only allowing lists" {
-  run bash -c 'curl -s 127.0.0.1/api/lists?type=allow | jq ".lists[].type"'
-  printf "%s\n" "${lines[@]}"
-  # Check no block entries are present
-  [[ ${lines[@]} != *"block"* ]]
-}
-
-@test "Check /api/lists without type parameter returning all lists" {
-  run bash -c 'curl -s 127.0.0.1/api/lists | jq ".lists[].type"'
-  printf "%s\n" "${lines[@]}"
-  # Check both block and allow entries are present
-  [[ ${lines[@]} == *"allow"* ]]
-  [[ ${lines[@]} == *"block"* ]]
-}
-
-@test "API: No UNKNOWN reply in API" {
-  run bash -c 'curl -s 127.0.0.1/api/queries?reply=UNKNOWN | jq .queries'
-  printf "%s\n" "${lines[@]}"
-  run bash -c 'curl -s 127.0.0.1/api/queries?reply=UNKNOWN | jq ".queries | length"'
-  [[ ${lines[0]} == "0" ]]
-}
-
-@test "API: No UNKNOWN status in API" {
-  run bash -c 'curl -s 127.0.0.1/api/queries?status=UNKNOWN | jq .queries'
-  printf "%s\n" "${lines[@]}"
-  run bash -c 'curl -s 127.0.0.1/api/queries?status=UNKNOWN | jq ".queries | length"'
-  [[ ${lines[0]} == "0" ]]
-}
-
-@test "Lua server page outside /admin is not served by default" {
-  run bash -c 'curl -sI 127.0.0.1/broken_lua'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "HTTP/1.1 404 Not Found"* ]]
-}
-
-# This test should run before a password is set
-@test "Lua server page is generating proper backtrace" {
-  # Enable serving of Lua pages outside /admin
-  logsize_before=$(stat -c%s /var/log/pihole/FTL.log)
-  run bash -c './pihole-FTL --config webserver.serve_all true'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == 'true' ]]
-
-  # Wait for change to become effective
-  run bash -c "./pihole-FTL wait-for 'DEBUG_CONFIG: pihole.toml unchanged' /var/log/pihole/FTL.log 5 $logsize_before"
-  printf "%s\n" "${lines[@]}"
-  [[ $status == 0 ]]
-
-  # Run a page with a syntax error
-  run bash -c 'curl -s 127.0.0.1/broken_lua'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == 'Hello, world 1!' ]]
-  [[ ${lines[1]} == 'Hello, world 2!' ]]
-  [[ ${lines[2]} == '[string "/var/www/html/broken_lua_2.lp"]:4: Cannot include [/var/www/html/does_not_exist.lp]: not found' ]]
-  [[ ${lines[3]} == 'stack traceback:' ]]
-  [[ ${lines[4]} == "	[C]: in field 'include'" ]]
-  [[ ${lines[5]} == '	[string "/var/www/html/broken_lua.lp"]:4: in main chunk' ]]
-  [[ ${lines[6]} == 'aborting' ]]
-  [[ ${lines[7]} == '' ]]
-
-  # Check if the error is logged (-F = fixed string (no regex), -q = quiet)
-  run grep -qF 'LSP Kepler: call failed: runtime error: [string "/var/www/html/broken_lua_2.lp"]:4: Cannot include [/var/www/html/does_not_exist.lp]: not found' /var/log/pihole/webserver.log
-  [[ $status == 0 ]]
-}
-
-@test "API authorization (without password): No login required" {
-  run bash -c 'curl -s 127.0.0.1/api/auth'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == '{"session":{"valid":true,"totp":false,"sid":null,"validity":-1,"message":"no password set"},"took":'*'}' ]]
-}
+# NOTE: API tests (search, history, lists, queries, Lua pages, auth)
+# moved to pytest (test/api/test_api.py, test/api/test_z_auth.py)
 
 @test "Config validation working on the CLI (type-based checking)" {
   run bash -c './pihole-FTL --config dns.port true'
@@ -1912,15 +1770,7 @@ setup() {
   [[ $status == 2 ]]
 }
 
-@test "Config validation working on the API (type-based checking)" {
-  run bash -c 'curl -s -X PATCH http://127.0.0.1/api/config -d "{\"config\":{\"dns\":{\"blockESNI\":15.5}}}"'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "{\"error\":{\"key\":\"bad_request\",\"message\":\"Config item is invalid\",\"hint\":\"dns.blockESNI: not of type bool\"},\"took\":"*"}" ]]
-
-  run bash -c 'curl -s -X PATCH http://127.0.0.1/api/config -d "{\"config\":{\"dns\":{\"piholePTR\":\"something_else\"}}}"'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "{\"error\":{\"key\":\"bad_request\",\"message\":\"Config item is invalid\",\"hint\":\"dns.piholePTR: invalid option\"},\"took\":"*"}" ]]
-}
+# NOTE: API config validation tests moved to pytest (test/api/test_api.py)
 
 @test "Config validation working on the CLI (validator-based checking)" {
   run bash -c './pihole-FTL --config dns.hosts "[\"111.222.333.444 abc\"]"'
@@ -1998,97 +1848,47 @@ setup() {
   [[ ${lines[0]} == '[ 192.168.1.1 host1.local # this is a comment with  double spaces, 10.0.0.1 host2.local ]' ]]
 }
 
-@test "Config validation working on the API (validator-based checking)" {
-  run bash -c 'curl -s -X PATCH http://127.0.0.1/api/config -d "{\"config\":{\"files\":{\"pcap\":\"%gh4b\"}}}"'
+# NOTE: API config validation, auth, Lua page tests moved to pytest
+# (test/api/test_api.py, test/api/test_z_auth.py)
+
+@test "CLI: Setting and removing password leaves no net change" {
+  # Set password via CLI
+  logsize_before=$(stat -c%s /var/log/pihole/FTL.log)
+  run bash -c './pihole-FTL --config webserver.api.password ABC'
   printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "{\"error\":{\"key\":\"bad_request\",\"message\":\"Config item validation failed\",\"hint\":\"files.pcap: not a valid file path (\\\"%gh4b\\\")\"},\"took\":"*"}" ]]
-
-  run bash -c 'curl -s -X PATCH http://127.0.0.1/api/config -d "{\"config\":{\"dns\":{\"cnameRecords\":[\"a\"]}}}"'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "{\"error\":{\"key\":\"bad_request\",\"message\":\"Config item validation failed\",\"hint\":\"dns.cnameRecords[0]: not a valid CNAME definition (too few elements)\"},\"took\":"*"}" ]]
-
-  run bash -c 'curl -s -X PATCH http://127.0.0.1/api/config -d "{\"config\":{\"dns\":{\"cnameRecords\":[\"a,b,c\",\"a,b,c,,c\"]}}}"'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "{\"error\":{\"key\":\"bad_request\",\"message\":\"Config item validation failed\",\"hint\":\"dns.cnameRecords[1]: contains an empty string at position 3\"},\"took\":"*"}" ]]
-
-  run bash -c 'curl -s -X PATCH http://127.0.0.1/api/config -d "{\"config\":{\"dns\":{\"cnameRecords\":[\"a,b,c\",\"a,b,c\",5]}}}"'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "{\"error\":{\"key\":\"bad_request\",\"message\":\"Config item is invalid\",\"hint\":\"dns.cnameRecords: array has invalid elements\"},\"took\":"*"}" ]]
-}
-
-@test "Create, set, and use application password" {
-  run bash -c 'curl -s 127.0.0.1/api/auth/app'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == '{"app":{"password":"'*'","hash":"'*'"},"took":'*'}' ]]
-
-  # Extract password and hash from response
-  password="$(echo ${lines[0]} | jq .app.password)"
-  pwhash="$(echo ${lines[0]} | jq .app.hash)"
-
-  printf "password: %s\n" "${password}"
-  printf "pwhash: %s\n" "${pwhash}"
-
-  # Set app password hash
-  # Configure extra timeouts to avoid CI issues on very slow runners due to
-  # compute-intense hashing
-  run bash -c 'curl -s --connect-timeout 15 --max-time 20 -X PATCH http://127.0.0.1/api/config/webserver/api/app_pwhash -d  "{\"config\":{\"webserver\":{\"api\":{\"app_pwhash\":${0}}}}}"' "${pwhash}"
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "{\"config\":{\"webserver\":{\"api\":{\"app_pwhash\":${pwhash}}}},\"took\":"*"}" ]]
-
-  # Login using app password is successful
-  run bash -c 'curl -s -X POST 127.0.0.1/api/auth -d "{\"password\":${0}}" | jq .session.valid' "${password}"
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "true" ]]
-}
-
-@test "CLI password file is as expected" {
-  # Check the file is non-empty
-  run bash -c 'cat /etc/pihole/cli_pw'
-  printf "%s\n" "${lines[@]}"
-  [[ ${#lines[0]} -gt 0 ]]
-
-  # Check if file has exactly one line
-  [[ ${#lines[@]} -eq 1 ]]
-
-  # Check if this line does NOT have a newline character at the end
-  [[ ${lines[0]} != *$'\n' ]]
-
-  # Check the file content is valid base64
-  run bash -c 'echo ${0} | base64 -d > /dev/null' "${lines[0]}"
   [[ $status == 0 ]]
 
-  # Check permission set on the file is 640
-  run bash -c 'stat -c "%a" /etc/pihole/cli_pw'
+  # Wait for the running FTL instance to pick up the config file change
+  run bash -c "./pihole-FTL wait-for 'pihole.toml unchanged' /var/log/pihole/FTL.log 5 $logsize_before"
   printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "640" ]]
-}
+  [[ $status == 0 ]]
 
-@test "API authorization: Setting password" {
-  # Password: ABC
-  run bash -c 'curl -s -X PATCH http://127.0.0.1/api/config/webserver/api/password -d "{\"config\":{\"webserver\":{\"api\":{\"password\":\"ABC\"}}}}"'
+  # Verify login is required
+  run bash -c 'curl -s 127.0.0.1/api/auth'
   printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "{\"config\":{\"webserver\":{\"api\":{\"password\":\"********\"}}},\"took\":"*"}" ]]
-}
+  [[ ${lines[0]} == *'"valid":false'* ]]
 
-@test "API authorization (with password): Incorrect password is rejected if password auth is enabled" {
-  # Password: ABC
-  run bash -c 'curl -s -X POST 127.0.0.1/api/auth -d "{\"password\":\"XXX\"}"'
+  # Verify correct password works
+  run bash -c 'curl -s -X POST 127.0.0.1/api/auth -d "{\"password\":\"ABC\"}" | jq .session.valid'
   printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "{\"session\":{\"valid\":false,\"totp\":false,\"sid\":null,\"validity\":-1,\"message\":\"password incorrect\"},\"took\":"*"}" ]]
-}
+  [[ ${lines[0]} == "true" ]]
 
-@test "API authorization (with password): Correct password is accepted" {
-  # Password: ABC
-  run bash -c 'curl -s -X POST 127.0.0.1/api/auth -d "{\"password\":\"ABC\"}"'
+  # Remove password via CLI
+  logsize_before=$(stat -c%s /var/log/pihole/FTL.log)
+  run bash -c './pihole-FTL --config webserver.api.password ""'
   printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "{\"session\":{\"valid\":true,\"totp\":false,\"sid\":\""*"\",\"csrf\":\""*"\",\"validity\":300,\"message\":\"password correct\"},\"took\":"*"}" ]]
-}
+  [[ $status == 0 ]]
 
-# This test should run after a password is set
-@test "Lua server page outside of webhome is served without login" {
-  run bash -c 'curl -s 127.0.0.1/broken_lua'
+  # Wait for the running FTL instance to pick up the config file change
+  run bash -c "./pihole-FTL wait-for 'pihole.toml unchanged' /var/log/pihole/FTL.log 5 $logsize_before"
   printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == 'Hello, world 1!' ]]
+  [[ $status == 0 ]]
+
+  # Verify no login is required again
+  run bash -c 'curl -s 127.0.0.1/api/auth'
+  printf "%s\n" "${lines[@]}"
+  [[ ${lines[0]} == *'"valid":true'* ]]
+  [[ ${lines[0]} == *'"no password set"'* ]]
 }
 
 @test "Test TLS/SSL server using self-signed certificate" {
@@ -2248,22 +2048,6 @@ setup() {
   [[ ${lines[0]} == "localhost" ]]
 }
 
-@test "API validation" {
-  if [ "${CI_ARCH:-}" = "linux/riscv64" ]; then
-    skip "Skipping API validation on linux/riscv64"
-  fi
-  logsize_before=$(stat -c%s /var/log/pihole/FTL.log)
-  run python3 test/api/checkAPI.py
-  printf "%s\n" "${lines[@]}"
-  [[ $status == 0 ]]
-
-  # Wait here until FTL has finished restarting after the teleporter import,
-  # otherwise the next test might start before FTL is ready
-  run bash -c "./pihole-FTL wait-for 'PID of FTL process:' /var/log/pihole/FTL.log 90 $logsize_before"
-  printf "%s\n" "${lines[@]}"
-  [[ $status == 0 ]]
-}
-
 @test "Create, verify and re-import Teleporter file via CLI" {
   run bash -c './pihole-FTL --teleporter'
   printf "%s\n" "${lines[@]}"
@@ -2288,20 +2072,7 @@ setup() {
   run bash -c "rm ${filename}"
 }
 
-@test "Expected number of config file rotations" {
-  # 1. Setting force4 = true (and others)
-  # 2. Setting dns.blocking.mode = "IP"
-  # 3. PATCH /api/config/webserver/api/password
-  run bash -c 'grep -c "INFO: Config file written to /etc/pihole/pihole.toml" /var/log/pihole/FTL.log'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "3" ]]
-  run bash -c 'grep -c "DEBUG_CONFIG: Config file written to /etc/pihole/dnsmasq.conf" /var/log/pihole/FTL.log'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "1" ]]
-  run bash -c 'grep -c "DEBUG_CONFIG: HOSTS file written to /etc/pihole/hosts/custom.list" /var/log/pihole/FTL.log'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "3" ]]
-}
+# NOTE: Config file rotation count test moved to test_final.bats
 
 @test "Suggest expected completions" {
   run bash -c './pihole-FTL --complete pihole-FTL versio'
@@ -2319,11 +2090,6 @@ setup() {
   [[ ${lines[1]} == "" ]]
 }
 
-@test "Query with ID 0 has been saved to the database" {
-  run bash -c './pihole-FTL sqlite3 /etc/pihole/pihole-FTL.db "SELECT COUNT(*) FROM queries WHERE id=0;"'
-  printf "%s\n" "${lines[@]}"
-  [[ ${lines[0]} == "1" ]]
-}
 
 @test "Webserver options are logged as expected" {
   run bash -c 'grep -F "Webserver option 0/12: document_root=/var/www/html" /var/log/pihole/FTL.log'
@@ -2354,19 +2120,4 @@ setup() {
   [[ $status == 0 ]]
 }
 
-@test "FTL terminates with message" {
-  logsize_before=$(stat -c%s /var/log/pihole/FTL.log)
-  # Kill pihole-FTL after having completed tests
-  # This will also shut down the debugger
-  pid=$(cat /run/pihole-FTL.pid)
-  printf "Killing pihole-FTL with PID %s\n" "$pid"
-
-  run bash -c "kill $pid"
-  printf "%s\n" "${lines[@]}"
-  [[ $status == 0 ]]
-
-  # Wait until pihole-FTL has terminated
-  run bash -c "./pihole-FTL wait-for '########## FTL terminated after' /var/log/pihole/FTL.log 30 $logsize_before"
-  printf "%s\n" "${lines[@]}"
-  [[ $status == 0 ]]
-}
+# NOTE: FTL termination test moved to run.sh (runs after both BATS and pytest)

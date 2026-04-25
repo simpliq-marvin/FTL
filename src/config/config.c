@@ -31,6 +31,7 @@
 #include "signals.h"
 // validation functions
 #include "config/validator.h"
+#include "datastructure.h"
 // getEnvVars()
 #include "config/env.h"
 // sha256sum()
@@ -419,7 +420,7 @@ void initConfig(struct config *conf)
 	conf->dns.CNAMEdeepInspect.c = validate_stub; // Only type-based checking
 
 	conf->dns.blockESNI.k = "dns.blockESNI";
-	conf->dns.blockESNI.h = "Should _esni. subdomains be blocked by default? Encrypted Server Name Indication (ESNI) is certainly a good step into the right direction to enhance privacy on the web. It prevents on-path observers, including ISPs, coffee shop owners and firewalls, from intercepting the TLS Server Name Indication (SNI) extension by encrypting it. This prevents the SNI from being used to determine which websites users are visiting.\n\n ESNI will obviously cause issues for pixelserv-tls which will be unable to generate matching certificates on-the-fly when it cannot read the SNI. Cloudflare and Firefox are already enabling ESNI. According to the IETF draft (link above), we can easily restore pixelserv-tls's operation by replying NXDOMAIN to _esni. subdomains of blocked domains as this mimics a \"not configured for this domain\" behavior.";
+	conf->dns.blockESNI.h = "Should _esni. subdomains of blocked domains also be blocked by default? Encrypted Server Name Indication (ESNI) is certainly a good step into the right direction to enhance privacy on the web. It prevents on-path observers, including ISPs, coffee shop owners and firewalls, from intercepting the TLS Server Name Indication (SNI) extension by encrypting it. This prevents the SNI from being used to determine which websites users are visiting.\n\n ESNI will obviously cause issues for pixelserv-tls which will be unable to generate matching certificates on-the-fly when it cannot read the SNI. According to the IETF draft (link above), we can easily restore pixelserv-tls's operation by replying NXDOMAIN to _esni. subdomains of blocked domains as this mimics a \"not configured for this domain\" behavior.\n\n ESNI is mostly obsolete. It was previously rolled out by Cloudflare and Firefox, but they, as well as almost every client and server, are now using Encrypted Client Hello (ECH) instead of ESNI. ECH is served via the HTTPS record on the same RRname, so it will automatically be blocked.";
 	conf->dns.blockESNI.t = CONF_BOOL;
 	conf->dns.blockESNI.d.b = true;
 	conf->dns.blockESNI.c = validate_stub; // Only type-based checking
@@ -529,7 +530,7 @@ void initConfig(struct config *conf)
 	conf->dns.interface.t = CONF_STRING;
 	conf->dns.interface.f = FLAG_RESTART_FTL;
 	conf->dns.interface.d.s = (char*)"";
-	conf->dns.interface.c = validate_stub; // Type-based checking + dnsmasq syntax checking
+	conf->dns.interface.c = validate_str_no_newline;
 	
 	conf->dns.hostRecord.k = "dns.hostRecord";
 	conf->dns.hostRecord.h = "Add an A, AAAA and PTR record to the DNS. This adds a singular name to the DNS with associated IPv4 (A) and IPv6 (AAAA) records\n\n Example: \"laptop,laptop.lan,192.168.0.1,1234::100\"";
@@ -769,6 +770,13 @@ void initConfig(struct config *conf)
 	conf->dns.rateLimit.interval.t = CONF_UINT;
 	conf->dns.rateLimit.interval.d.ui = 60;
 	conf->dns.rateLimit.interval.c = validate_stub; // Only type-based checking
+
+	conf->dns.rateLimit.exemptIPs.k = "dns.rateLimit.exemptIPs";
+	conf->dns.rateLimit.exemptIPs.h = "IP addresses that should bypass per-client DNS rate limiting. Matching is exact by IP address and applies only when rate limiting is enabled. This is intended for trusted clients that may generate short legitimate DNS bursts.\n\n Example: [ \"192.168.1.10\", \"fd00::10\" ]";
+	conf->dns.rateLimit.exemptIPs.a = cJSON_CreateStringReference("Array of valid IPv4 and/or IPv6 addresses");
+	conf->dns.rateLimit.exemptIPs.t = CONF_JSON_STRING_ARRAY;
+	conf->dns.rateLimit.exemptIPs.d.json = cJSON_CreateArray();
+	conf->dns.rateLimit.exemptIPs.c = validate_ip_array;
 
 	// sub-struct dhcp
 	conf->dhcp.active.k = "dhcp.active";
@@ -1305,14 +1313,7 @@ void initConfig(struct config *conf)
 	conf->webserver.api.temp.unit.c = validate_stub; // Only type-based checking
 
 	// struct files
-	conf->files.pid.k = "files.pid";
-	conf->files.pid.h = "The file which contains the PID of FTL's main process.";
-	conf->files.pid.a = cJSON_CreateStringReference("Any writable file");
-	conf->files.pid.t = CONF_STRING;
-	conf->files.pid.f = FLAG_RESTART_FTL;
-	conf->files.pid.d.s = (char*)"/run/pihole-FTL.pid";
-	conf->files.pid.c = validate_filepath;
-
+	// Note: files.pid is hardcoded as FTL_PID_FILE — see GHSA-6w8x-p785-6pm4
 	conf->files.database.k = "files.database";
 	conf->files.database.h = "The location of FTL's long-term database";
 	conf->files.database.a = cJSON_CreateStringReference("Any FTL database");
@@ -2040,6 +2041,7 @@ void replace_config(struct config *newconf)
 
 	// Replace old config struct by changed one atomically
 	memcpy(&config, newconf, sizeof(struct config));
+	reload_all_per_client_rate_limit_exemption();
 
 	// Free old backup struct
 	free_config(&old_conf, false);

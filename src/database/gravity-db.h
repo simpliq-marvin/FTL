@@ -14,6 +14,8 @@
 #include "datastructure.h"
 // Definition of struct regexData
 #include "regex_r.h"
+// SQLite3
+#include "database/sqlite3.h"
 
 // Table row record, not all fields are used by all tables
 typedef struct {
@@ -62,9 +64,11 @@ bool gravityDB_get_regex_client_groups(clientsData *client, const unsigned int n
                                        const unsigned char type, const char* table);
 
 bool gravityDB_readTable(const enum gravity_list_type listtype, const char *filter,
-                         const char **message, const bool exact, const char *ids);
-bool gravityDB_readTableGetRow(const enum gravity_list_type listtype, tablerow *row, const char **message);
-void gravityDB_readTableFinalize(void);
+                         const char **message, const bool exact, const char *ids,
+                         sqlite3_stmt **stmt);
+bool gravityDB_readTableGetRow(const enum gravity_list_type listtype, tablerow *row, const char **message,
+                               sqlite3_stmt *stmt);
+void gravityDB_readTableFinalize(sqlite3_stmt *stmt);
 bool gravityDB_addToTable(const enum gravity_list_type listtype, tablerow *row,
                           const char **message, const enum http_method method);
 bool gravityDB_delFromTable(const enum gravity_list_type listtype, const cJSON* array, unsigned int *deleted, const char **message);

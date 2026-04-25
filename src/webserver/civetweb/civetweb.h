@@ -951,7 +951,7 @@ void FTL_mbed_debug(void *user_param, int level, const char *file,
 
 // Buffer used for additional "Set-Cookie" headers
 #define PIHOLE_HEADERS_MAXLEN 1024
-extern char pi_hole_extra_headers[PIHOLE_HEADERS_MAXLEN];
+extern _Thread_local char pi_hole_extra_headers[PIHOLE_HEADERS_MAXLEN];
 /********************************************************************************************/
 
 

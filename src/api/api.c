@@ -88,6 +88,7 @@ static struct {
 	{ "/api/stats/database/summary",            "",                           api_stats_database_summary,            { API_PARSE_JSON, 0                         }, true,  HTTP_GET },
 	{ "/api/stats/database/query_types",        "",                           api_stats_database_query_types,        { API_PARSE_JSON, 0                         }, true,  HTTP_GET },
 	{ "/api/stats/database/upstreams",          "",                           api_stats_database_upstreams,          { API_PARSE_JSON, 0                         }, true,  HTTP_GET },
+	{ "/api/config/_properties",                "",                           api_config_properties,                 { API_PARSE_JSON, 0                         }, true,  HTTP_GET },
 	{ "/api/config",                            "",                           api_config,                            { API_PARSE_JSON, 0                         }, true,  HTTP_GET | HTTP_PATCH },
 	{ "/api/config",                            "/{element}",                 api_config,                            { API_PARSE_JSON, 0                         }, true,  HTTP_GET },
 	{ "/api/config",                            "/{element}/{value}",         api_config,                            { API_PARSE_JSON, 0                         }, true,  HTTP_DELETE | HTTP_PUT },
@@ -128,7 +129,7 @@ int api_handler(struct mg_connection *conn, void *ignored)
 		double_time(),
 		{ false, NULL, NULL, NULL, 0u },
 		{ false },
-		NULL,
+		{ 0 },
 		{ API_FLAG_NONE, 0 }
 	};
 

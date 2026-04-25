@@ -38,6 +38,11 @@ static volatile pid_t mpid = 0;
 static time_t FTLstarttime = 0;
 volatile int exit_code = EXIT_SUCCESS;
 
+// Store the SIGTERM source for re-logging during cleanup so the termination
+// reason is always visible near the final "FTL terminated" message, even if
+// earlier log lines have been lost (see #2818)
+static char term_source[256] = { 0 };
+
 // Binary path stored by init_backtrace() — signal-handler-safe static buffer,
 // never reallocated, safe to read from any context including signal handlers
 #if defined(USE_UNWIND)
@@ -144,30 +149,40 @@ static void find_mapping_name(const void *addr, char *buf, const size_t buflen)
 	fclose(maps);
 }
 
+// Result of a single-frame addr2line resolution attempt.
+// Used by generate_backtrace() to decide whether to print manual guidance.
+enum frame_result {
+	FRAME_RESOLVED,    // addr2line resolved function name + source location
+	FRAME_UNRESOLVED,  // addr2line was attempted but did not resolve the frame
+	FRAME_SKIPPED,     // addr2line was not attempted (disabled or binary path unknown)
+};
+
 // Log one backtrace frame as a single line.
 // Resolved:   "  #N  func_name                    src/file.c:line"
 // Unresolved: "  #N  0xADDRESS  (reason)"
-static void log_frame(const int idx, const void *addr, const void *rel_addr)
+// Returns FRAME_RESOLVED when addr2line produced a result, FRAME_UNRESOLVED
+// when addr2line was tried but failed, FRAME_SKIPPED when it was not attempted.
+static enum frame_result log_frame(const int idx, const void *addr, const void *rel_addr)
 {
 	if(!config.misc.addr2line.v.b)
 	{
 		log_info("  #%-2i  %p  (addr2line disabled via config)", idx, addr);
-		return;
+		return FRAME_SKIPPED;
 	}
 	if(bin_path[0] == '\0')
 	{
 		log_info("  #%-2i  %p  (binary path unknown)", idx, addr);
-		return;
+		return FRAME_SKIPPED;
 	}
 
 	char cmd[512];
-	snprintf(cmd, sizeof(cmd), "addr2line -f -e %s %p", bin_path, rel_addr);
+	snprintf(cmd, sizeof(cmd), "addr2line -f -e \"%s\" %p", bin_path, rel_addr);
 
 	FILE *fp = popen(cmd, "r");
 	if(fp == NULL)
 	{
 		log_info("  #%-2i  %p  (addr2line not available)", idx, addr);
-		return;
+		return FRAME_UNRESOLVED;
 	}
 
 	char func[256] = { 0 }, loc[256] = { 0 };
@@ -183,7 +198,7 @@ static void log_frame(const int idx, const void *addr, const void *rel_addr)
 	}
 	pclose(fp);
 
-	if(strcmp(func, "??") == 0)
+	if(func[0] == '\0' || strcmp(func, "??") == 0)
 	{
 		// addr2line found nothing — the frame is in a shared library or a
 		// stripped section.  Try dladdr() which reads .dynsym, the dynamic
@@ -209,7 +224,7 @@ static void log_frame(const int idx, const void *addr, const void *rel_addr)
 			else
 				log_info("  #%-2i  %p  (no debug info)", idx, addr);
 		}
-		return;
+		return FRAME_UNRESOLVED;
 	}
 
 	// Strip the compile-time source root to show project-relative paths
@@ -221,6 +236,7 @@ static void log_frame(const int idx, const void *addr, const void *rel_addr)
 #endif
 
 	log_info("  #%-2i  %-30s  %s", idx, func, display_loc);
+	return FRAME_RESOLVED;
 }
 #endif // USE_UNWIND
 
@@ -259,10 +275,35 @@ void generate_backtrace(void)
 	_Unwind_Backtrace(unwind_callback, &state);
 
 	log_info("Backtrace (%d frames):", state.count);
+	bool any_addr2line_failed = false;
 	for(int i = 0; i < state.count; i++)
 	{
 		void *rel = (void *)((uintptr_t)frames[i] - exe_load_addr);
-		log_frame(i, frames[i], rel);
+		if(log_frame(i, frames[i], rel) == FRAME_UNRESOLVED)
+			any_addr2line_failed = true;
+	}
+
+	// If addr2line was attempted but could not resolve one or more frames
+	// (e.g. because it is not installed), print per-frame commands the
+	// user can run manually after installing binutils.  Use dladdr() to
+	// determine the correct object file and base address for each frame
+	// so the commands are actionable for shared-library frames too.
+	if(any_addr2line_failed)
+	{
+		log_info("One or more frames could not be resolved. Install addr2line");
+		log_info("(e.g. \"apt install binutils\" or \"apk add binutils\") and run:");
+		for(int i = 0; i < state.count; i++)
+		{
+			Dl_info dl = { 0 };
+			const char *obj = bin_path;
+			void *rel = (void *)((uintptr_t)frames[i] - exe_load_addr);
+			if(dladdr(frames[i], &dl) != 0 && dl.dli_fname != NULL && dl.dli_fbase != NULL)
+			{
+				obj = dl.dli_fname;
+				rel = (void *)((uintptr_t)frames[i] - (uintptr_t)dl.dli_fbase);
+			}
+			log_info("  addr2line -f -e \"%s\" %p", obj, rel);
+		}
 	}
 #else
 	log_info("!!! INFO: pihole-FTL has not been compiled with unwinding support, cannot generate backtrace !!!");
@@ -576,8 +617,11 @@ static void SIGTERM_handler(int signum, siginfo_t *si, void *context)
 		strcpy(kill_user, "N/A");
 	}
 
-	// Log who sent the signal
+	// Log who sent the signal and store for re-logging during cleanup (#2818)
 	log_info("Asked to terminate by \"%s\" (PID %ld, user %s UID %ld)",
+	         kill_name, (long int)kill_pid, kill_user, (long int)kill_uid);
+	snprintf(term_source, sizeof(term_source),
+	         "\"%s\" (PID %ld, user %s UID %ld)",
 	         kill_name, (long int)kill_pid, kill_user, (long int)kill_uid);
 
 	// Check if we can terminate
@@ -686,6 +730,23 @@ pid_t main_pid(void)
 		// Has not been set so far
 		return getpid();
 }
+
+// Deliberately NOT marked __attribute__((pure)): the buffer this reads is
+// written from SIGTERM_handler, which GCC's pure analysis cannot see, so a
+// pure annotation would let the compiler cache/hoist the result across an
+// asynchronous signal-handler update. Suppress the corresponding warning
+// for just this function (see #2839).
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsuggest-attribute=pure"
+#endif
+const char *get_term_source(void)
+{
+	return term_source[0] != '\0' ? term_source : NULL;
+}
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 void thread_sleepms(const enum thread_types thread, const int milliseconds)
 {

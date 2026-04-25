@@ -28,6 +28,7 @@ void generate_backtrace(void);
 int sigtest(void);
 int sigrtmin(void);
 void restart_ftl(const char *reason);
+const char *get_term_source(void);
 pid_t debugger(void);
 
 extern volatile int exit_code;

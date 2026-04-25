@@ -110,7 +110,7 @@ set(EXTRAWARN_GCC6 "-Werror \
                     -Woverlength-strings")
 
 # Extra warnings flags available only in GCC 7 and higher
-if(CMAKE_C_COMPILER_VERSION VERSION_EQUAL 7 OR CMAKE_C_COMPILER_VERSION VERSION_GREATER 7)
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 7)
     set(EXTRAWARN_GCC7 "-Wformat-overflow=2 \
                         -Wformat-truncation=2 \
                         -Wstringop-overflow=4 \
@@ -121,7 +121,7 @@ else()
 endif()
 
 # Extra warnings flags available only in GCC 8 and higher
-if(CMAKE_C_COMPILER_VERSION VERSION_EQUAL 8 OR CMAKE_C_COMPILER_VERSION VERSION_GREATER 8)
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 8)
     set(EXTRAWARN_GCC8 "-Wduplicated-cond \
                         -Wduplicated-branches \
                         -Wcast-align=strict \

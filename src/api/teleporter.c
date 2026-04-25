@@ -221,7 +221,7 @@ static int api_teleporter_POST(struct ftl_conn *api)
 {
 	// Check if this is an app session and reject the request if app sudo
 	// mode is disabled
-	if(api->session != NULL && api->session->app && !config.webserver.api.app_sudo.v.b)
+	if(api->session.used && api->session.app && !config.webserver.api.app_sudo.v.b)
 	{
 		return send_json_error(api, 403,
 		                       "forbidden",
@@ -230,7 +230,7 @@ static int api_teleporter_POST(struct ftl_conn *api)
 	}
 
 	// Check if this is a CLI session and reject the request
-	if(api->session != NULL && api->session->cli)
+	if(api->session.used && api->session.cli)
 	{
 		return send_json_error(api, 403,
 		                       "forbidden",

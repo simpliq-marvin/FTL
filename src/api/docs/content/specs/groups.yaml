@@ -79,6 +79,8 @@ components:
                     $ref: 'groups.yaml#/components/examples/errors/uri_error/item_missing'
                   no_payload:
                     $ref: 'groups.yaml#/components/examples/errors/bad_request/no_payload'
+                  duplicate:
+                    $ref: 'groups.yaml#/components/examples/errors/database_error/duplicate'
           '401':
             description: Unauthorized
             content:

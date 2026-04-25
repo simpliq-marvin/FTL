@@ -80,28 +80,20 @@ export FTLCONF_debug_api="not_a_bool"
 export FTLCONF_MISC_CHECK_SHMEM=91
 export FTLCONF_files_pcap='*123#./test/pcap'
 
-# Prepare gdb session
-echo "handle SIGHUP nostop SIGPIPE nostop SIGTERM nostop SIG32 nostop SIG33 nostop SIG34 nostop SIG35 nostop SIG41 nostop" > /root/.gdbinit
-
 # Start FTL
 if ! su pihole -s /bin/sh -c /home/pihole/pihole-FTL; then
   echo "pihole-FTL failed to start"
   exit 1
 fi
 
-# Prepare BATS
-if [ -z "$BATS" ]; then
-  mkdir -p test/libs
-  git clone --depth=1 --quiet https://github.com/bats-core/bats-core test/libs/bats > /dev/null
-  BATS=test/libs/bats/bin/bats
-fi
-
 # Give FTL some time for startup preparations
 sleep 2
 
-# Attach debugger and immediately continue running the binary
-# In case a non-ignored signal occurs (a crash), create a full backtrace
-gdb -p $(cat /run/pihole-FTL.pid) --ex continue --ex "bt full" &
+# Optionally attach gdb for crash backtraces (opt-in via GDB=1)
+if [[ "${GDB}" == "1" ]]; then
+  echo "handle SIGHUP nostop SIGPIPE nostop SIGTERM nostop SIG32 nostop SIG33 nostop SIG34 nostop SIG35 nostop SIG41 nostop" > /root/.gdbinit
+  gdb -p $(cat /run/pihole-FTL.pid) --ex continue --ex "bt full" &
+fi
 
 # Print versions of pihole-FTL
 echo -n "FTL version (DNS): "
@@ -111,12 +103,58 @@ echo "FTL verbose version (CLI): "
 echo -n "Contained dnsmasq version (DNS): "
 dig TXT CHAOS version.bind @127.0.0.1 +short
 
-# Install py3-dnspython
-apk add --no-cache py3-dnspython
+# Pre-warm DNSSEC root key cache. dnsmasq's DNSSEC validation can
+# trigger internal DNSKEY queries for the root zone at unpredictable
+# times. By explicitly querying DNSKEY for "." first, we force the
+# root key into cache so all subsequent DNSSEC validation uses the
+# cached key. This makes the total query count deterministic.
+dig DNSKEY . @127.0.0.1 +dnssec > /dev/null 2>&1
+sleep 1
 
-# Run tests
+RET=0
+
+# Prepare BATS
+if [ -z "$BATS" ]; then
+  mkdir -p test/libs
+  git clone --depth=1 --quiet https://github.com/bats-core/bats-core test/libs/bats > /dev/null
+  BATS=test/libs/bats/bin/bats
+fi
+
+# Run BATS test suite (includes DNS, regex, CLI, config tests;
+# FTL remains running for the pytest API tests afterwards)
+echo "Running BATS test suite..."
 $BATS -p "test/test_suite.bats"
 RET=$?
+
+# Trigger network table update (PARSE_NEIGHBOR_CACHE) so mock-hwaddr
+# devices like ip-127.0.0.1 exist before pytest checks them.
+# RT signal offset 5 maps to PARSE_NEIGHBOR_CACHE in signals.c.
+kill -SIGRTMIN+5 "$(cat /run/pihole-FTL.pid)" 2>/dev/null
+sleep 2
+
+# Run pytest API tests (FTL is still running — BATS no longer terminates it)
+# Skip on riscv64 — the emulated runner is too slow for the full API suite
+if [[ "${CI_ARCH}" != "linux/riscv64" ]]; then
+  echo "Running pytest API tests..."
+  python3 -m pytest test/api/ -v
+  PYTEST_RET=$?
+  if [[ $PYTEST_RET != 0 ]]; then
+    RET=$PYTEST_RET
+  fi
+else
+  echo "Skipping pytest API tests (too slow on ${CI_ARCH})"
+fi
+
+# Run final BATS suite — log validation and FTL termination
+# This runs after both test_suite.bats and pytest to catch any
+# unexpected log messages from the entire run, then terminates FTL.
+echo ""
+echo "Running final log validation..."
+$BATS -p "test/test_final.bats"
+FINAL_RET=$?
+if [[ $FINAL_RET != 0 ]]; then
+  RET=$FINAL_RET
+fi
 
 curl_to_tricorder() {
   curl --silent --upload-file "${1}" https://tricorder.pi-hole.net
@@ -146,9 +184,11 @@ fi
 # Restore umask
 umask "$OLDUMASK"
 
-# Run performance tests
-if ! su pihole -s /bin/sh -c "/home/pihole/pihole-FTL --perf"; then
-  echo "pihole-FTL --perf failed to start"
+# Run performance tests (opt-in via RUN_PERF_TEST=1)
+if [[ "${RUN_PERF_TEST}" == "1" ]]; then
+  if ! su pihole -s /bin/sh -c "/home/pihole/pihole-FTL --perf"; then
+    echo "pihole-FTL --perf failed to start"
+  fi
 fi
 
 # Remove copied file

@@ -16,35 +16,37 @@ CREATE TABLE domainlist
 (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	type INTEGER NOT NULL DEFAULT 0,
-	domain TEXT UNIQUE NOT NULL,
+	domain TEXT NOT NULL,
 	enabled BOOLEAN NOT NULL DEFAULT 1,
 	date_added INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as int)),
 	date_modified INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as int)),
-	comment TEXT
+	comment TEXT,
+	UNIQUE(domain, type)
 );
 
 CREATE TABLE adlist
 (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-	type INTEGER NOT NULL DEFAULT 0,
-  address TEXT UNIQUE NOT NULL,
+  address TEXT NOT NULL,
   enabled BOOLEAN NOT NULL DEFAULT 1,
-  date_added INTEGER NOT NULL DEFAULT (cast(strftime('%s','now') as int)),
-  date_modified INTEGER NOT NULL DEFAULT (cast(strftime('%s','now') as int)),
+  date_added INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as int)),
+  date_modified INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as int)),
   comment TEXT,
   date_updated INTEGER,
   number INTEGER NOT NULL DEFAULT 0,
   invalid_domains INTEGER NOT NULL DEFAULT 0,
   status INTEGER NOT NULL DEFAULT 0,
-  abp_entries INTEGER NOT NULL DEFAULT 0
+  abp_entries INTEGER NOT NULL DEFAULT 0,
+  type INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(address, type)
 );
 
 CREATE TABLE adlist_by_group
 (
-	adlist_id INTEGER NOT NULL REFERENCES adlist (id),
-	group_id INTEGER NOT NULL REFERENCES "group" (id),
+	adlist_id INTEGER NOT NULL REFERENCES adlist (id) ON DELETE CASCADE,
+	group_id INTEGER NOT NULL REFERENCES "group" (id) ON DELETE CASCADE,
 	PRIMARY KEY (adlist_id, group_id)
-);
+) WITHOUT ROWID;
 
 CREATE TABLE gravity
 (
@@ -62,21 +64,21 @@ CREATE TABLE info
 (
 	property TEXT PRIMARY KEY,
 	value TEXT NOT NULL
-);
+) WITHOUT ROWID;
 
 INSERT INTO "info" VALUES('version','20');
 
 CREATE TABLE domainlist_by_group
 (
-	domainlist_id INTEGER NOT NULL REFERENCES domainlist (id),
-	group_id INTEGER NOT NULL REFERENCES "group" (id),
+	domainlist_id INTEGER NOT NULL REFERENCES domainlist (id) ON DELETE CASCADE,
+	group_id INTEGER NOT NULL REFERENCES "group" (id) ON DELETE CASCADE,
 	PRIMARY KEY (domainlist_id, group_id)
-);
+) WITHOUT ROWID;
 
 CREATE TABLE client
 (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	ip TEXT NOL NULL UNIQUE,
+	ip TEXT NOT NULL UNIQUE,
 	date_added INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as int)),
 	date_modified INTEGER NOT NULL DEFAULT (cast(strftime('%s', 'now') as int)),
 	comment TEXT
@@ -84,24 +86,24 @@ CREATE TABLE client
 
 CREATE TABLE client_by_group
 (
-	client_id INTEGER NOT NULL REFERENCES client (id),
-	group_id INTEGER NOT NULL REFERENCES "group" (id),
+	client_id INTEGER NOT NULL REFERENCES client (id) ON DELETE CASCADE,
+	group_id INTEGER NOT NULL REFERENCES "group" (id) ON DELETE CASCADE,
 	PRIMARY KEY (client_id, group_id)
-);
+) WITHOUT ROWID;
 
-CREATE TRIGGER tr_adlist_update AFTER UPDATE ON adlist
+CREATE TRIGGER tr_adlist_update AFTER UPDATE OF address,enabled,comment ON adlist
     BEGIN
-      UPDATE adlist SET date_modified = (cast(strftime('%s', 'now') as int)) WHERE address = NEW.address;
+      UPDATE adlist SET date_modified = (cast(strftime('%s', 'now') as int)) WHERE id = NEW.id;
     END;
 
 CREATE TRIGGER tr_client_update AFTER UPDATE ON client
     BEGIN
-      UPDATE client SET date_modified = (cast(strftime('%s', 'now') as int)) WHERE ip = NEW.ip;
+      UPDATE client SET date_modified = (cast(strftime('%s', 'now') as int)) WHERE id = NEW.id;
     END;
 
 CREATE TRIGGER tr_domainlist_update AFTER UPDATE ON domainlist
     BEGIN
-      UPDATE domainlist SET date_modified = (cast(strftime('%s', 'now') as int)) WHERE domain = NEW.domain;
+      UPDATE domainlist SET date_modified = (cast(strftime('%s', 'now') as int)) WHERE id = NEW.id;
     END;
 
 CREATE VIEW vw_allowlist AS SELECT domain, domainlist.id AS id, domainlist_by_group.group_id AS group_id
@@ -109,39 +111,35 @@ CREATE VIEW vw_allowlist AS SELECT domain, domainlist.id AS id, domainlist_by_gr
     LEFT JOIN domainlist_by_group ON domainlist_by_group.domainlist_id = domainlist.id
     LEFT JOIN "group" ON "group".id = domainlist_by_group.group_id
     WHERE domainlist.enabled = 1 AND (domainlist_by_group.group_id IS NULL OR "group".enabled = 1)
-    AND domainlist.type = 0
-    ORDER BY domainlist.id;
+    AND domainlist.type = 0;
 
 CREATE VIEW vw_denylist AS SELECT domain, domainlist.id AS id, domainlist_by_group.group_id AS group_id
     FROM domainlist
     LEFT JOIN domainlist_by_group ON domainlist_by_group.domainlist_id = domainlist.id
     LEFT JOIN "group" ON "group".id = domainlist_by_group.group_id
     WHERE domainlist.enabled = 1 AND (domainlist_by_group.group_id IS NULL OR "group".enabled = 1)
-    AND domainlist.type = 1
-    ORDER BY domainlist.id;
+    AND domainlist.type = 1;
 
 CREATE VIEW vw_regex_allowlist AS SELECT domain, domainlist.id AS id, domainlist_by_group.group_id AS group_id
     FROM domainlist
     LEFT JOIN domainlist_by_group ON domainlist_by_group.domainlist_id = domainlist.id
     LEFT JOIN "group" ON "group".id = domainlist_by_group.group_id
     WHERE domainlist.enabled = 1 AND (domainlist_by_group.group_id IS NULL OR "group".enabled = 1)
-    AND domainlist.type = 2
-    ORDER BY domainlist.id;
+    AND domainlist.type = 2;
 
 CREATE VIEW vw_regex_denylist AS SELECT domain, domainlist.id AS id, domainlist_by_group.group_id AS group_id
     FROM domainlist
     LEFT JOIN domainlist_by_group ON domainlist_by_group.domainlist_id = domainlist.id
     LEFT JOIN "group" ON "group".id = domainlist_by_group.group_id
     WHERE domainlist.enabled = 1 AND (domainlist_by_group.group_id IS NULL OR "group".enabled = 1)
-    AND domainlist.type = 3
-    ORDER BY domainlist.id;
+    AND domainlist.type = 3;
 
 CREATE VIEW vw_gravity AS SELECT domain, adlist.id AS adlist_id, adlist_by_group.group_id AS group_id
     FROM gravity
     LEFT JOIN adlist_by_group ON adlist_by_group.adlist_id = gravity.adlist_id
     LEFT JOIN adlist ON adlist.id = gravity.adlist_id
     LEFT JOIN "group" ON "group".id = adlist_by_group.group_id
-    WHERE adlist.enabled = 1 AND (adlist_by_group.group_id IS NULL OR "group".enabled = 1) AND adlist.type = 0;
+    WHERE adlist.enabled = 1 AND (adlist_by_group.group_id IS NULL OR "group".enabled = 1);
 
 CREATE VIEW vw_antigravity AS SELECT domain, adlist.id AS adlist_id, adlist_by_group.group_id AS group_id
     FROM antigravity
@@ -150,7 +148,7 @@ CREATE VIEW vw_antigravity AS SELECT domain, adlist.id AS adlist_id, adlist_by_g
     LEFT JOIN "group" ON "group".id = adlist_by_group.group_id
     WHERE adlist.enabled = 1 AND (adlist_by_group.group_id IS NULL OR "group".enabled = 1) AND adlist.type = 1;
 
-CREATE VIEW vw_adlist AS SELECT DISTINCT address, id
+CREATE VIEW vw_adlist AS SELECT DISTINCT address, id, type
     FROM adlist
     WHERE enabled = 1
     ORDER BY id;
@@ -180,21 +178,25 @@ CREATE TRIGGER tr_group_zero AFTER DELETE ON "group"
       INSERT OR IGNORE INTO "group" (id,enabled,name) VALUES (0,1,'Default');
     END;
 
-CREATE TRIGGER tr_domainlist_delete BEFORE DELETE ON domainlist
+CREATE TRIGGER tr_domainlist_delete AFTER DELETE ON domainlist
     BEGIN
       DELETE FROM domainlist_by_group WHERE domainlist_id = OLD.id;
     END;
 
-CREATE TRIGGER tr_adlist_delete BEFORE DELETE ON adlist
+CREATE TRIGGER tr_adlist_delete AFTER DELETE ON adlist
     BEGIN
       DELETE FROM adlist_by_group WHERE adlist_id = OLD.id;
     END;
 
-CREATE TRIGGER tr_client_delete BEFORE DELETE ON client
+CREATE TRIGGER tr_client_delete AFTER DELETE ON client
     BEGIN
       DELETE FROM client_by_group WHERE client_id = OLD.id;
     END;
 
+
+CREATE INDEX idx_adlist_by_group_gid ON adlist_by_group (group_id, adlist_id);
+CREATE INDEX idx_domainlist_by_group_gid ON domainlist_by_group (group_id, domainlist_id);
+CREATE INDEX idx_gravity ON gravity (domain, adlist_id);
 
 /* ^^^ basic gravity table definition, taken from /advanced/Templates/gravity.db.sql ^^^ */
 /* vvv Test content following vvv */
@@ -224,8 +226,8 @@ INSERT INTO domainlist VALUES(17,1,'blacklisted-group-disabled.com',1,1559928803
 INSERT INTO domainlist VALUES(18,0,'mask.icloud.com',1,1559928803,1559928803,'Allowing special domain');
 DELETE FROM domainlist_by_group WHERE domainlist_id = 18 AND group_id = 0;
 
-INSERT INTO adlist VALUES(1,0,'https://pi-hole.net/block.txt',1,1559928803,1559928803,'Fake block-list',1559928803,2000,2,1,0);
-INSERT INTO adlist VALUES(2,1,'https://pi-hole.net/allow.txt',1,1559928803,1559928803,'Fake allow-list',1559928803,2000,2,1,0);
+INSERT INTO adlist VALUES(1,'https://pi-hole.net/block.txt',1,1559928803,1559928803,'Fake block-list',1559928803,2000,2,1,0,0);
+INSERT INTO adlist VALUES(2,'https://pi-hole.net/allow.txt',1,1559928803,1559928803,'Fake allow-list',1559928803,2000,2,1,0,1);
 
 INSERT INTO gravity VALUES('allowed.ftl',1);
 INSERT INTO gravity VALUES('gravity.ftl',1);

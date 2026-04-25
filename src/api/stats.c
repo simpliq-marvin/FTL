@@ -784,7 +784,12 @@ int api_stats_recentblocked(struct ftl_conn *api)
 			if(domain == NULL)
 				continue;
 
-			JSON_REF_STR_IN_ARRAY(blocked, domain);
+			// Must COPY, not reference: the SHM strings buffer can
+			// be relocated by mremap(MREMAP_MAYMOVE) in another
+			// thread after we release the lock below, which would
+			// leave a dangling pointer if we used
+			// JSON_REF_STR_IN_ARRAY here (see #2786)
+			JSON_COPY_STR_TO_ARRAY(blocked, domain);
 
 			// Only count when added successfully
 			found++;

@@ -30,7 +30,8 @@ static int api_list_read(struct ftl_conn *api,
                          cJSON *processed)
 {
 	const char *sql_msg = NULL;
-	if(!gravityDB_readTable(listtype, item, &sql_msg, true, NULL))
+	sqlite3_stmt *stmt = NULL;
+	if(!gravityDB_readTable(listtype, item, &sql_msg, true, NULL, &stmt))
 	{
 		return send_json_error(api, 400, // 400 Bad Request
 		                       "database_error",
@@ -40,7 +41,7 @@ static int api_list_read(struct ftl_conn *api,
 
 	tablerow table = { 0 };
 	cJSON *rows = JSON_NEW_ARRAY();
-	while(gravityDB_readTableGetRow(listtype, &table, &sql_msg))
+	while(gravityDB_readTableGetRow(listtype, &table, &sql_msg, stmt))
 	{
 		cJSON *row = JSON_NEW_OBJECT();
 
@@ -98,7 +99,7 @@ static int api_list_read(struct ftl_conn *api,
 				if(ret != 0)
 				{
 					JSON_DELETE(rows);
-					gravityDB_readTableFinalize();
+					gravityDB_readTableFinalize(stmt);
 					return ret;
 				}
 
@@ -135,7 +136,7 @@ static int api_list_read(struct ftl_conn *api,
 
 		JSON_ADD_ITEM_TO_ARRAY(rows, row);
 	}
-	gravityDB_readTableFinalize();
+	gravityDB_readTableFinalize(stmt);
 
 	if(sql_msg == NULL)
 	{
@@ -412,24 +413,72 @@ static int api_list_write(struct ftl_conn *api,
 			if(listtype == GRAVITY_DOMAINLIST_ALLOW_EXACT ||
 			   listtype == GRAVITY_DOMAINLIST_DENY_EXACT)
 			{
-				char *punycode = NULL;
-				const int rc = idn2_to_ascii_lz(it->valuestring, &punycode, IDN2_NFC_INPUT | IDN2_NONTRANSITIONAL);
-				if (rc != IDN2_OK)
+				// Check if domain contains non-ASCII characters
+				// that need IDN/punycode conversion
+				bool needs_idn = false;
+				for(const char *p = it->valuestring; *p != '\0'; p++)
 				{
-					// Invalid domain name
-					return send_json_error(api, 400,
-					                       "bad_request",
-					                       "Invalid request: Invalid domain name",
-					                       idn2_strerror(rc));
+					// 0x7F is the last ASCII character, so
+					// anything above that is non-ASCII and
+					// needs IDN conversion
+					if((unsigned char)*p > 0x7F)
+					{
+						needs_idn = true;
+						break;
+					}
 				}
-				// Convert punycode domain to lowercase
-				for(unsigned int i = 0u; i < strlen(punycode); i++)
-					punycode[i] = tolower(punycode[i]);
 
-				// Validate punycode domain
+				if(needs_idn)
+				{
+					char *punycode = NULL;
+					const int rc = idn2_to_ascii_lz(it->valuestring, &punycode, IDN2_NFC_INPUT | IDN2_NONTRANSITIONAL);
+					if (rc != IDN2_OK)
+					{
+						// Invalid domain name
+						return send_json_error(api, 400,
+						                       "bad_request",
+						                       "Invalid request: Invalid domain name",
+						                       idn2_strerror(rc));
+					}
+
+					// Replace domain with punycode version
+					if(!(it->type & cJSON_IsReference))
+						free(it->valuestring);
+					it->valuestring = punycode;
+					// Remove reference flag
+					it->type &= ~cJSON_IsReference;
+				}
+				else if(it->type & cJSON_IsReference)
+				{
+					// Domain is a cJSON reference pointing into
+					// the request buffer - make a writable copy
+					// before modifying it in-place below
+					// Stripping the reference flag is
+					// necessary to signal cJSON to free the
+					// allocated string later
+					char *domain = strdup(it->valuestring);
+					if(domain == NULL)
+					{
+						if(allocated_json)
+							cJSON_Delete(row.items);
+						return send_json_error(api, 500, // 500 Internal Server Error
+						                       "internal_error",
+						                       "Memory allocation failed",
+						                       NULL);
+					}
+					it->valuestring = domain;
+					// Remove reference flag
+					it->type &= ~cJSON_IsReference;
+				}
+
+				// Convert domain to lowercase
+				for(unsigned int i = 0u; i < strlen(it->valuestring); i++)
+					it->valuestring[i] = tolower((unsigned char)it->valuestring[i]);
+
+				// Validate domain
 				// This will reject domains like äöü{{{.com
 				// which convert to xn--{{{-pla4gpb.com
-				if(!valid_domain(punycode, strlen(punycode), false))
+				if(!valid_domain(it->valuestring, strlen(it->valuestring), false))
 				{
 					if(allocated_json)
 						cJSON_Delete(row.items);
@@ -438,13 +487,6 @@ static int api_list_write(struct ftl_conn *api,
 							"Invalid domain",
 							it->valuestring);
 				}
-
-				// Replace domain with punycode version
-				if(!(it->type & cJSON_IsReference))
-					free(it->valuestring);
-				it->valuestring = punycode;
-				// Remove reference flag
-				it->type &= ~cJSON_IsReference;
 			}
 		}
 	}
@@ -496,6 +538,20 @@ static int api_list_write(struct ftl_conn *api,
 		if(!okay)
 			JSON_COPY_STR_TO_OBJECT(details, "error", sql_msg);
 		cJSON_AddItemToArray(okay ? success : errors, details);
+	}
+
+	// If all items failed, return a database error instead of
+	// a success response with an empty result set
+	if(cJSON_GetArraySize(success) == 0 && cJSON_GetArraySize(errors) > 0)
+	{
+		const int ret = send_json_error(api, 400, // 400 Bad Request
+		                       "database_error",
+		                       "Could not add to gravity database",
+		                       sql_msg);
+		cJSON_Delete(processed);
+		if(allocated_json)
+			cJSON_Delete(row.items);
+		return ret;
 	}
 
 	// Inform the resolver that it needs to reload gravity

@@ -134,7 +134,7 @@ void savePID(void)
 	const pid_t pid = getpid();
 	// Open file for writing
 	FILE *f = NULL;
-	if((f = fopen(config.files.pid.v.s, "w+")) == NULL)
+	if((f = fopen(FTL_PID_FILE, "w+")) == NULL)
 	{
 		// Log error
 		log_warn("Unable to write PID to file: %s", strerror(errno));
@@ -158,14 +158,10 @@ void savePID(void)
  */
 static void removePID(void)
 {
-	// Config may not have been loaded (e.g. crash/backtrace subcommands),
-	// in which case no PID file was ever written — nothing to remove.
-	if(config.files.pid.v.s == NULL)
-		return;
 
 	FILE *f = NULL;
 	// Open file for writing to overwrite/empty it
-	if((f = fopen(config.files.pid.v.s, "w")) == NULL)
+	if((f = fopen(FTL_PID_FILE, "w")) == NULL)
 	{
 		log_warn("Unable to empty PID file: %s", strerror(errno));
 		return;
@@ -461,6 +457,11 @@ void cleanup(const int ret)
 
 	char buffer[42] = { 0 };
 	format_time(buffer, 0, timer_elapsed_msec(EXIT_TIMER));
+	// Re-log the termination source near the final message so it is visible
+	// even when earlier log lines have been lost or rotated (#2818)
+	const char *source = get_term_source();
+	if(source != NULL)
+		log_info("Terminated by %s", source);
 	if(ret == RESTART_FTL_CODE)
 		log_info("########## FTL terminated after%s (internal restart)! ##########", buffer);
 	else

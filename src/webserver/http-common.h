@@ -54,7 +54,7 @@ struct ftl_conn {
 		bool restart :1;
 		const char *restart_reason;
 	} ftl;
-	struct session *session;
+	struct session session;
 
 	struct api_options opts;
 };

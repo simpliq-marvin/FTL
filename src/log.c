@@ -30,6 +30,7 @@
 #include "gc.h"
 
 static bool print_log = true, print_stdout = true;
+static bool ftl_log_available = true;
 static const char *process = "";
 bool debug_flags[DEBUG_MAX] = { false };
 
@@ -56,8 +57,10 @@ void init_FTL_log(const char *name)
 			printf("ERROR: Opening of FTL log (%s) failed: %s\nUsing syslog instead!\n",
 			       config.files.log.ftl.v.s, strerror(errno));
 			syslog(LOG_ERR, "Opening of FTL\'s log file failed, using syslog instead!");
-			config.files.log.ftl.v.s = NULL;
+			ftl_log_available = false;
 		}
+		else
+			ftl_log_available = true;
 
 		// Close log file
 		if(logfile != NULL)
@@ -294,7 +297,7 @@ void __attribute__ ((format (printf, 3, 4))) _FTL_log(const int priority, const 
 		add_to_fifo_buffer(FIFO_FTL, buffer, prio, len > MAX_MSG_FIFO ? MAX_MSG_FIFO : len);
 
 		bool logged = false;
-		if(config.files.log.ftl.v.s != NULL)
+		if(ftl_log_available && config.files.log.ftl.v.s != NULL)
 		{
 			// Open log file
 			FILE *logfile = fopen(config.files.log.ftl.v.s, "a+");

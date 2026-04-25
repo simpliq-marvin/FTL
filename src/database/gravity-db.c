@@ -2049,10 +2049,10 @@ bool gravityDB_delFromTable(const enum gravity_list_type listtype, const cJSON* 
 	return true;
 }
 
-static sqlite3_stmt* read_stmt = NULL;
 bool gravityDB_readTable(const enum gravity_list_type listtype,
                          const char *item, const char **message,
-                         const bool exact, const char *ids)
+                         const bool exact, const char *ids,
+                         sqlite3_stmt **read_stmt_p)
 {
 	if(gravity_db == NULL)
 	{
@@ -2208,7 +2208,8 @@ bool gravityDB_readTable(const enum gravity_list_type listtype,
 	}
 
 	// Prepare SQLite statement
-	int rc = sqlite3_prepare_v2(gravity_db, querystr, -1, &read_stmt, NULL);
+	*read_stmt_p = NULL;
+	int rc = sqlite3_prepare_v2(gravity_db, querystr, -1, read_stmt_p, NULL);
 	if( rc != SQLITE_OK ){
 		*message = sqlite3_errmsg(gravity_db);
 		log_err("gravityDB_readTable(%d => (%s)) - SQL error prepare (%i): %s => %s",
@@ -2220,13 +2221,14 @@ bool gravityDB_readTable(const enum gravity_list_type listtype,
 	}
 
 	// Bind item to prepared statement (if requested)
-	int idx = sqlite3_bind_parameter_index(read_stmt, ":item");
-	if(idx > 0 && (rc = sqlite3_bind_text(read_stmt, idx, like_name, -1, SQLITE_TRANSIENT)) != SQLITE_OK)
+	int idx = sqlite3_bind_parameter_index(*read_stmt_p, ":item");
+	if(idx > 0 && (rc = sqlite3_bind_text(*read_stmt_p, idx, like_name, -1, SQLITE_TRANSIENT)) != SQLITE_OK)
 	{
 		*message = sqlite3_errmsg(gravity_db);
 		log_err("gravityDB_readTable(%d => (%s), %s): Failed to bind item (error %d) - %s",
 		        listtype, type, like_name, rc, *message);
-		sqlite3_finalize(read_stmt);
+		sqlite3_finalize(*read_stmt_p);
+		*read_stmt_p = NULL;
 		if(!exact)
 			free(like_name);
 		free(querystr);
@@ -2234,13 +2236,14 @@ bool gravityDB_readTable(const enum gravity_list_type listtype,
 	}
 
 	// Bind ids to prepared statement (if requested)
-	idx = sqlite3_bind_parameter_index(read_stmt, ":ids");
-	if(idx > 0 && (rc = sqlite3_bind_text(read_stmt, idx, ids, -1, SQLITE_STATIC)) != SQLITE_OK)
+	idx = sqlite3_bind_parameter_index(*read_stmt_p, ":ids");
+	if(idx > 0 && (rc = sqlite3_bind_text(*read_stmt_p, idx, ids, -1, SQLITE_STATIC)) != SQLITE_OK)
 	{
 		*message = sqlite3_errmsg(gravity_db);
 		log_err("gravityDB_readTable(%d => (%s), %s): Failed to bind ids (error %d) - %s",
 		        listtype, type, like_name, rc, *message);
-		sqlite3_finalize(read_stmt);
+		sqlite3_finalize(*read_stmt_p);
+		*read_stmt_p = NULL;
 		if(!exact)
 			free(like_name);
 		free(querystr);
@@ -2263,7 +2266,8 @@ bool gravityDB_readTable(const enum gravity_list_type listtype,
 	return true;
 }
 
-bool gravityDB_readTableGetRow(const enum gravity_list_type listtype, tablerow *row, const char **message)
+bool gravityDB_readTableGetRow(const enum gravity_list_type listtype, tablerow *row, const char **message,
+                               sqlite3_stmt *read_stmt)
 {
 	// Perform step
 	const int rc = sqlite3_step(read_stmt);
@@ -2416,7 +2420,7 @@ bool gravityDB_readTableGetRow(const enum gravity_list_type listtype, tablerow *
 }
 
 // Finalize statement of a gravity database transaction
-void gravityDB_readTableFinalize(void)
+void gravityDB_readTableFinalize(sqlite3_stmt *read_stmt)
 {
 	// Finalize statement
 	sqlite3_finalize(read_stmt);

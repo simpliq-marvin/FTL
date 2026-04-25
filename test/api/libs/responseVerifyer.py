@@ -122,9 +122,6 @@ class ResponseVerifyer():
 		self.auth_method = self.ftl.auth_method
 		if FTLresponse is None:
 			return self.ftl.errors
-		
-#		if endpoint.startswith("/domains"):
-#			pprint.pprint(FTLresponse)  # --- IGNORE ---
 
 		self.YAMLresponse = {}
 		# Checking depends on the expected mimetype
@@ -133,16 +130,18 @@ class ResponseVerifyer():
 			# Check if the response is an object. If so, we have to check it
 			# recursively
 			if 'type' in YAMLresponseSchema and YAMLresponseSchema['type'] == 'object':
+				required = YAMLresponseSchema.get('required', [])
 				# Loop over all properties of the object
 				for prop in YAMLresponseSchema['properties']:
-					self.verify_property(YAMLresponseSchema['properties'], YAMLresponseExamples, FTLresponse, [prop])
+					self.verify_property(YAMLresponseSchema['properties'], YAMLresponseExamples, FTLresponse, [prop], required)
 
 			# Check if the response is a gather-all object. If so, we have
 			# to check all objects in the array individually
 			elif 'allOf' in YAMLresponseSchema and len(YAMLresponseSchema['allOf']) > 0:
 				for i in range(len(YAMLresponseSchema['allOf'])):
+					required = YAMLresponseSchema['allOf'][i].get('required', [])
 					for prop in YAMLresponseSchema['allOf'][i]['properties']:
-						self.verify_property(YAMLresponseSchema['allOf'][i]['properties'], YAMLresponseExamples, FTLresponse, [prop])
+						self.verify_property(YAMLresponseSchema['allOf'][i]['properties'], YAMLresponseExamples, FTLresponse, [prop], required)
 						if 'additionalProperties' in YAMLresponseSchema['allOf'][i]['properties'][prop]:
 							additionalProperties.append(prop)
 
@@ -167,14 +166,12 @@ class ResponseVerifyer():
 					# something missing
 					if root_prop in additionalProperties:
 						continue
-					print(FTLflat.keys())
-					print(YAMLflat.keys())
 					self.errors.append("Property '" + property + "' missing in the API specs (1)")
 
 		elif expected_mimetype == "application/zip":
 			file_like_object = io.BytesIO(FTLresponse)
 			with zipfile.ZipFile(file_like_object) as zipfile_obj:
-				# Read all the files in the archive and check their CRC’s and
+				# Read all the files in the archive and check their CRC's and
 				# file headers. Returns the name of the first bad file, or else
 				# returns None.
 				bad_filename = zipfile_obj.testzip()
@@ -286,7 +283,7 @@ class ResponseVerifyer():
 
 
 	# Verify a single property
-	def verify_property(self, YAMLprops: dict, YAMLexamples: dict, FTLprops: dict, props: list):
+	def verify_property(self, YAMLprops: dict, YAMLexamples: dict, FTLprops: dict, props: list, required: list = None):
 		all_okay = True
 
 		# Build flat path of this property
@@ -305,17 +302,22 @@ class ResponseVerifyer():
 
 		# Check if the property is defined in the FTL response
 		if props[-1] not in FTLprops:
-			self.errors.append("Property '" + flat_path + "' missing in FTL's response")
-			return False
+			# Only report as error if this property is required
+			if required is not None and props[-1] in required:
+				self.errors.append("Property '" + flat_path + "' missing in FTL's response")
+				return False
+			# Optional property absent — skip silently
+			return True
 		FTLprop = FTLprops[props[-1]]
 
 		# If this is another object, we have to dive deeper
 		if YAMLprop['type'] == 'object':
 			if 'properties' in YAMLprop:
+				nested_required = YAMLprop.get('required', [])
 				# Loop over all properties of the object ...
 				for prop in YAMLprop['properties']:
 					# ... and check them recursively
-					if not self.verify_property(YAMLprop['properties'], YAMLexamples, FTLprop, props + [prop]):
+					if not self.verify_property(YAMLprop['properties'], YAMLexamples, FTLprop, props + [prop], nested_required):
 						all_okay = False
 			elif 'additionalProperties' not in YAMLprop:
 				self.errors.append(flat_path + " is an object, but the API specs define it as a simple object")
@@ -339,12 +341,14 @@ class ResponseVerifyer():
 				# Check for allOf definitions in an array defining arrays of objects where all components must be checked
 				if 'allOf' in YAMLprop['items'] and type(FTLprop[i]) is dict:
 					for j in FTLprop[i]:
-						# Collect all allOf components ...
+						# Collect all allOf components and their required fields
 						allOf_props = {}
+						allOf_required = []
 						for allOf in YAMLprop['items']['allOf']:
 							allOf_props.update(allOf['properties'])
+							allOf_required.extend(allOf.get('required', []))
 						# ... and check them recursively
-						if not self.verify_property(allOf_props, YAMLexamples, FTLprop[i], props + [i, str(j)]):
+						if not self.verify_property(allOf_props, YAMLexamples, FTLprop[i], props + [i, str(j)], allOf_required):
 							all_okay = False
 					continue
 
@@ -352,9 +356,10 @@ class ResponseVerifyer():
 					self.errors.append(flat_path + " is an array of objects, but the API specs define it as a simple array")
 					return False
 
+				items_required = YAMLprop['items'].get('required', [])
 				for j in FTLprop[i]:
 					# ... and check them recursively
-					if not self.verify_property(YAMLprop['items']['properties'], YAMLexamples, FTLprop[i], props + [i, str(j)]):
+					if not self.verify_property(YAMLprop['items']['properties'], YAMLexamples, FTLprop[i], props + [i, str(j)], items_required):
 						all_okay = False
 
 			# Add this property to the YAML response

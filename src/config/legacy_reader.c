@@ -241,9 +241,6 @@ const char *readFTLlegacy(struct config *conf)
 	buffer = parseFTLconf(fp, "DBIMPORT");
 	parseBool(buffer, &conf->database.DBimport.v.b);
 
-	// PIDFILE
-	conf->files.pid.v.s = getPath(fp, "PIDFILE", conf->files.pid.v.s);
-
 	// MACVENDORDB
 	conf->files.macvendor.v.s = getPath(fp, "MACVENDORDB", conf->files.macvendor.v.s);
 

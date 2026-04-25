@@ -10,6 +10,9 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+// Hardcoded PID path — see GHSA-6w8x-p785-6pm4
+#define FTL_PID_FILE "/run/pihole-FTL.pid"
+
 // enum privacy_level
 #include "enums.h"
 #include <stdbool.h>
@@ -189,6 +192,7 @@ struct config {
 		struct {
 			struct conf_item count;
 			struct conf_item interval;
+			struct conf_item exemptIPs;
 		} rateLimit;
 	} dns;
 
@@ -297,7 +301,6 @@ struct config {
 	} webserver;
 
 	struct {
-		struct conf_item pid;
 		struct conf_item database;
 		struct conf_item tmp_db;
 		struct conf_item gravity;

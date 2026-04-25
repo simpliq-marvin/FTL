@@ -27,9 +27,31 @@
 #include "database/session-table.h"
 // FTLDBerror()
 #include "database/common.h"
+// pthread_mutex_t
+#include <pthread.h>
 
 static uint16_t max_sessions = 0;
 static struct session *auth_data = NULL;
+// Mutex to protect concurrent access to auth_data from civetweb worker threads
+static pthread_mutex_t auth_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// RAII-style auto-unlock: the mutex is released when the guard variable goes
+// out of scope or on any return (including hidden returns in JSON macros).
+// Use AUTOUNLOCK() to release early; the cleanup then becomes a no-op.
+static inline void auto_unlock(pthread_mutex_t **mtx) {
+	if(*mtx) pthread_mutex_unlock(*mtx);
+}
+#define AUTOLOCK(m) \
+	pthread_mutex_lock(m); \
+	__attribute__((cleanup(auto_unlock))) pthread_mutex_t *_alock = (m)
+// Like AUTOLOCK, but only locks when cond is true. This must be a single
+// declaration statement (not "if(cond) AUTOLOCK(m)") because AUTOLOCK expands
+// to two statements and the cleanup variable must live at function scope —
+// scoping it to an if body would trigger immediate unlock.
+#define AUTOLOCK_IF(m, cond) \
+	__attribute__((cleanup(auto_unlock))) pthread_mutex_t *_alock = \
+		(cond) ? (pthread_mutex_lock(m), (m)) : NULL
+#define AUTOUNLOCK() do { pthread_mutex_unlock(_alock); _alock = NULL; } while(0)
 
 static void add_request_info(struct ftl_conn *api, const char *csrf)
 {
@@ -211,6 +233,7 @@ int check_client_auth(struct ftl_conn *api, const bool is_api)
 	}
 
 	bool expired = false;
+	AUTOLOCK(&auth_lock);
 	for(unsigned int i = 0; i < max_sessions; i++)
 	{
 		if(auth_data[i].used &&
@@ -271,7 +294,10 @@ int check_client_auth(struct ftl_conn *api, const bool is_api)
 	}
 
 	api->user_id = user_id;
-	api->session = &auth_data[user_id];
+	// Copy session so downstream handlers can read api->session without the
+	// lock, note that this is a valid struct copy in C (no memcpy needed)
+	api->session = auth_data[user_id];
+	AUTOUNLOCK();
 
 	api->message = "correct password";
 	return user_id;
@@ -281,6 +307,7 @@ static int get_all_sessions(struct ftl_conn *api, cJSON *json)
 {
 	const time_t now = time(NULL);
 	cJSON *sessions = JSON_NEW_ARRAY();
+	AUTOLOCK(&auth_lock);
 	for(int i = 0; i < max_sessions; i++)
 	{
 		if(!auth_data[i].used)
@@ -296,19 +323,20 @@ static int get_all_sessions(struct ftl_conn *api, cJSON *json)
 		JSON_ADD_NUMBER_TO_OBJECT(session, "login_at", auth_data[i].login_at);
 		JSON_ADD_NUMBER_TO_OBJECT(session, "last_active", auth_data[i].valid_until - config.webserver.session.timeout.v.ui);
 		JSON_ADD_NUMBER_TO_OBJECT(session, "valid_until", auth_data[i].valid_until);
-		JSON_REF_STR_IN_OBJECT(session, "remote_addr", auth_data[i].remote_addr);
+		JSON_COPY_STR_TO_OBJECT(session, "remote_addr", auth_data[i].remote_addr);
 		if(auth_data[i].user_agent[0] != '\0')
-			JSON_REF_STR_IN_OBJECT(session, "user_agent", auth_data[i].user_agent);
+			JSON_COPY_STR_TO_OBJECT(session, "user_agent", auth_data[i].user_agent);
 		else
 			JSON_ADD_NULL_TO_OBJECT(session, "user_agent");
 		if(auth_data[i].x_forwarded_for[0] != '\0')
-			JSON_REF_STR_IN_OBJECT(session, "x_forwarded_for", auth_data[i].x_forwarded_for);
+			JSON_COPY_STR_TO_OBJECT(session, "x_forwarded_for", auth_data[i].x_forwarded_for);
 		else
 			JSON_ADD_NULL_TO_OBJECT(session, "x_forwarded_for");
 		JSON_ADD_BOOL_TO_OBJECT(session, "app", auth_data[i].app);
 		JSON_ADD_BOOL_TO_OBJECT(session, "cli", auth_data[i].cli);
 		JSON_ADD_ITEM_TO_ARRAY(sessions, session);
 	}
+	AUTOUNLOCK();
 	JSON_ADD_ITEM_TO_OBJECT(json, "sessions", sessions);
 	return 0;
 }
@@ -330,17 +358,19 @@ static int get_session_object(struct ftl_conn *api, cJSON *json, const int user_
 	}
 
 	// Valid session
+	AUTOLOCK(&auth_lock);
 	if(user_id > API_AUTH_UNAUTHORIZED && auth_data[user_id].used)
 	{
 		JSON_ADD_BOOL_TO_OBJECT(session, "valid", true);
 		JSON_ADD_BOOL_TO_OBJECT(session, "totp", strlen(config.webserver.api.totp_secret.v.s) > 0);
-		JSON_REF_STR_IN_OBJECT(session, "sid", auth_data[user_id].sid);
-		JSON_REF_STR_IN_OBJECT(session, "csrf", auth_data[user_id].csrf);
+		JSON_COPY_STR_TO_OBJECT(session, "sid", auth_data[user_id].sid);
+		JSON_COPY_STR_TO_OBJECT(session, "csrf", auth_data[user_id].csrf);
 		JSON_ADD_NUMBER_TO_OBJECT(session, "validity", auth_data[user_id].valid_until - now);
 		JSON_REF_STR_IN_OBJECT(session, "message", api->message);
 		JSON_ADD_ITEM_TO_OBJECT(json, "session", session);
 		return 0;
 	}
+	AUTOUNLOCK();
 
 	// No valid session
 	JSON_ADD_BOOL_TO_OBJECT(session, "valid", false);
@@ -352,8 +382,12 @@ static int get_session_object(struct ftl_conn *api, cJSON *json, const int user_
 	return 0;
 }
 
-static bool delete_session(const int user_id)
+// Deletes the session of the given user ID. If is_locked is false, we ensure
+// auth_lock; otherwise, the lock is already held by the caller
+static bool delete_session(const int user_id, const bool is_locked)
 {
+	AUTOLOCK_IF(&auth_lock, !is_locked);
+
 	// Skip if nothing to be done here
 	if(user_id < 0 || user_id >= max_sessions)
 		return false;
@@ -368,7 +402,7 @@ static bool delete_session(const int user_id)
 
 void delete_all_sessions(void)
 {
-	// Zero out all sessions without looping
+	AUTOLOCK(&auth_lock);
 	memset(auth_data, 0, max_sessions*sizeof(*auth_data));
 }
 
@@ -379,12 +413,14 @@ static int send_api_auth_status(struct ftl_conn *api, const int user_id, const t
 		log_debug(DEBUG_API, "API Auth status: OK");
 
 		// Ten minutes validity
+		AUTOLOCK(&auth_lock);
 		if(snprintf(pi_hole_extra_headers, sizeof(pi_hole_extra_headers),
 		            FTL_SET_COOKIE,
 		            auth_data[user_id].sid, config.webserver.session.timeout.d.ui) < 0)
 		{
 			return send_json_error(api, 500, "internal_error", "Internal server error", NULL);
 		}
+		AUTOUNLOCK();
 
 		cJSON *json = JSON_NEW_OBJECT();
 		get_session_object(api, json, user_id, now);
@@ -399,7 +435,7 @@ static int send_api_auth_status(struct ftl_conn *api, const int user_id, const t
 			strncpy(pi_hole_extra_headers, FTL_DELETE_COOKIE, sizeof(pi_hole_extra_headers));
 
 			// Revoke client authentication. This slot can be used by a new client afterwards.
-			const int code = delete_session(user_id) ? 204 : 404;
+			const int code = delete_session(user_id, false) ? 204 : 404;
 
 			// Send empty reply with appropriate HTTP status code
 			send_http_code(api, NULL, code, "");
@@ -579,6 +615,7 @@ int api_auth(struct ftl_conn *api)
 		}
 
 		// Find unused authentication slot
+		AUTOLOCK(&auth_lock);
 		for(unsigned int i = 0; i < max_sessions; i++)
 		{
 			// Expired slow, mark as unused
@@ -587,7 +624,7 @@ int api_auth(struct ftl_conn *api)
 			{
 				log_debug(DEBUG_API, "API: Session of client %u (%s) expired, freeing...",
 				          i, auth_data[i].remote_addr);
-				delete_session(i);
+				delete_session(i, true);
 			}
 
 			// Found unused authentication slot (might have been freed before)
@@ -647,6 +684,7 @@ int api_auth(struct ftl_conn *api)
 					user_id, timestr, auth_data[user_id].remote_addr,
 					empty_password ? "empty password" : "correct response");
 		}
+		AUTOUNLOCK();
 		if(user_id == API_AUTH_UNAUTHORIZED)
 		{
 			log_warn("No free API seats available (webserver.api.max_sessions = %u), not authenticating client",
@@ -703,12 +741,13 @@ int api_auth_session_delete(struct ftl_conn *api)
 	if(uid <= API_AUTH_UNAUTHORIZED || uid >= max_sessions)
 		return send_json_error(api, 400, "bad_request", "Session ID out of bounds", NULL);
 
-	// Check if session is used
+	// Check if session is used and delete it
+	AUTOLOCK(&auth_lock);
 	if(!auth_data[uid].used)
 		return send_json_error(api, 400, "bad_request", "Session ID not in use", NULL);
 
-	// Delete session
-	const int code = delete_session(uid) ? 204 : 404;
+	const int code = delete_session(uid, true) ? 204 : 404;
+	AUTOUNLOCK();
 
 	// Send empty reply with appropriate HTTP status code
 	send_http_code(api, "application/json; charset=utf-8", code, "");
